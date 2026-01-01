@@ -119,10 +119,9 @@ static void NO_INSTRUMENT ensure_registered() {
   }
 }
 extern "C" {
-	extern int startrecord;	
+
 }
 void sigusr1_handler(int signum) {
-	startrecord = 0;
 	print_top10_spread();
 }
 bool call_init_finished = false;
@@ -133,11 +132,17 @@ __attribute__((constructor)) void init_after_call_init() {
 }
 
 extern "C" {
-
+	extern void * _ZN7console11set_displayE12display_type;
+	extern void * _ZN7console8readlineERNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEb;
+	void *symbol_addr = &_ZN7console8readlineERNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEb;
+	int beginrecord = 0;
 thread_local bool has_entered = false;
 thread_local bool has_exited = false;
 void NO_INSTRUMENT __cyg_profile_func_enter(void* this_fn, void* call_site) {
-	if (has_entered || !call_init_finished|| has_exited||!startrecord )
+	if (symbol_addr == this_fn) {
+		beginrecord = 1;
+	}
+	if (has_entered || !call_init_finished|| has_exited||!beginrecord)
 		return;
 	has_entered = true;
 	(void)call_site;
@@ -150,7 +155,7 @@ void NO_INSTRUMENT __cyg_profile_func_enter(void* this_fn, void* call_site) {
 
 void NO_INSTRUMENT __cyg_profile_func_exit(void* this_fn, void* call_site) {
   (void)call_site;
-  if (has_exited || !call_init_finished || has_entered || !startrecord)
+  if (has_exited || !call_init_finished || has_entered || !beginrecord)
 	  return;
   has_exited = true;
   if (tls_stack.empty()) return;

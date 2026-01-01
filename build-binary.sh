@@ -4,7 +4,7 @@ g++ -o src/profile.o -c -g3 src/profile.cpp
 
 cd extern/llama.cpp
 
-git apply ../../patchllama.diff
+#git apply ../../patchllama.diff
 
 rm -fr   buildinstrument
 cmake -B buildinstrument -DCMAKE_BUILD_TYPE=Debug -DGGML_CUDA=ON  -DBUILD_SHARED_LIBS=OFF -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON -DLLAMA_NATIVE=ON -DCMAKE_CXX_FLAGS="-finstrument-functions  -rdynamic" -DCMAKE_EXE_LINKER_FLAGS="-rdynamic" 
