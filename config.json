@@ -1,0 +1,7 @@
+{
+  "excluded_functions": [
+      ".*readline.*",
+      ".*set_display.*",
+      "^_?ZN.*"
+  ]
+}

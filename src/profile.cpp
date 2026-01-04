@@ -119,7 +119,7 @@ static void NO_INSTRUMENT ensure_registered() {
   }
 }
 extern "C" {
-
+	extern int startrecord;	
 }
 void sigusr1_handler(int signum) {
 	print_top10_spread();
@@ -127,7 +127,7 @@ void sigusr1_handler(int signum) {
 bool call_init_finished = false;
 __attribute__((constructor)) void init_after_call_init() {
 	// Set the flag to true once initialization is done
-	//signal(SIGUSR1, sigusr1_handler);
+	signal(SIGUSR1, sigusr1_handler);
 	call_init_finished = true;
 }
 
@@ -138,12 +138,19 @@ extern "C" {
 	int beginrecord = 0;
 thread_local bool has_entered = false;
 thread_local bool has_exited = false;
+	bool is_function_excluded(void* this_function);
+
+
 void NO_INSTRUMENT __cyg_profile_func_enter(void* this_fn, void* call_site) {
 	if (symbol_addr == this_fn) {
 		beginrecord = 1;
 	}
+
 	if (has_entered || !call_init_finished|| has_exited||!beginrecord)
 		return;
+	if (is_function_excluded(this_fn))
+		return;
+	
 	has_entered = true;
 	(void)call_site;
 	ensure_registered();
@@ -157,6 +164,10 @@ void NO_INSTRUMENT __cyg_profile_func_exit(void* this_fn, void* call_site) {
   (void)call_site;
   if (has_exited || !call_init_finished || has_entered || !beginrecord)
 	  return;
+
+  if (is_function_excluded(this_fn))
+		return;
+  
   has_exited = true;
   if (tls_stack.empty()) return;
 
