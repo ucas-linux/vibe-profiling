@@ -15,6 +15,8 @@ git submodule update --init --recursive
 
 ## Build
 sudo apt-get install elfutils libdw-dev
+
+
 ./build-binary.sh
 
 
