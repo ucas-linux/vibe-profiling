@@ -42,6 +42,59 @@ struct Stats {
 
 static std::mutex g_mu;
 static std::unordered_map<void*, Stats> g_stats;
+#include <elfutils/libdwfl.h>
+#include <cstdio>
+#include <cstdlib>
+#include <elfutils/libdwfl.h>
+#include <cstdio>
+#include <cstdint>
+#include <unistd.h>
+
+static Dwfl* make_dwfl() {
+    static Dwfl_Callbacks cb = {};
+    cb.find_elf = dwfl_linux_proc_find_elf;
+    cb.find_debuginfo = dwfl_standard_find_debuginfo;
+    cb.debuginfo_path = nullptr;
+
+    Dwfl* dwfl = dwfl_begin(&cb);
+    if (!dwfl) return nullptr;
+
+    if (dwfl_linux_proc_report(dwfl, getpid()) != 0) return nullptr;
+    if (dwfl_report_end(dwfl, nullptr, nullptr) != 0) return nullptr;
+
+    return dwfl;
+}
+
+const char* symbolize_addr(void* addr, char* buf, size_t buflen) {
+    static Dwfl* dwfl = make_dwfl();
+    if (!dwfl) {
+        std::snprintf(buf, buflen, "%p", addr);
+        return buf;
+    }
+
+    Dwarf_Addr a = (Dwarf_Addr)(uintptr_t)addr;
+
+    Dwfl_Module* mod = dwfl_addrmodule(dwfl, a);
+    if (!mod) {
+        std::snprintf(buf, buflen, "%p", addr);
+        return buf;
+    }
+
+    // Best effort (DWARF-aware name lookup)
+    if (const char* name = dwfl_module_addrname(mod, a)) {
+        return name;
+    }
+
+    // Fallback: closest ELF symbol (symtab/dynsym); signature uses GElf_Word* on many elfutils
+    GElf_Sym sym;
+    GElf_Word shndx = 0;
+    if (const char* name = dwfl_module_addrsym(mod, a, &sym, &shndx)) {
+        return name;
+    }
+
+    std::snprintf(buf, buflen, "%p", addr);
+    return buf;
+}
 
 // Optional: best-effort symbol name
 static const char* NO_INSTRUMENT symbol_name(void* fn, char* buf, size_t buflen) {
@@ -101,7 +154,7 @@ static void NO_INSTRUMENT print_top10_spread() {
 
   for (size_t i = 0; i < topN; i++) {
     char buf[100];
-    const char* name = symbol_name(rows[i].fn, buf, sizeof(buf));
+    const char* name = symbolize_addr(rows[i].fn, buf, sizeof(buf));
     std::fprintf(stderr, "%-4zu %-100s %12" PRIu64 " %12" PRIu64 " %12" PRIu64 " %8" PRIu64 "\n",
                  i + 1, name,
                  rows[i].min_ns, rows[i].max_ns, rows[i].spread_ns, rows[i].count);
