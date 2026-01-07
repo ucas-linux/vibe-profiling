@@ -41,7 +41,47 @@ struct Stats {
 };
 
 static std::mutex g_mu;
-static std::unordered_map<void*, Stats> g_stats;
+
+// Global container to hold merged stats across all threads
+std::unordered_map<void*, Stats> g_stats;  
+
+// Thread-local storage for stats
+thread_local std::unordered_map<void*, Stats> thread_stats;
+
+// Function to update stats in a thread-local storage
+void update_stats_in_thread(void* fn, uint64_t dur_ns) {
+    auto& stats = thread_stats[fn];
+    if (stats.count == 0) {
+        stats.min_ns = dur_ns;
+        stats.max_ns = dur_ns;
+    } else {
+        if (dur_ns < stats.min_ns) stats.min_ns = dur_ns;
+        if (dur_ns > stats.max_ns) stats.max_ns = dur_ns;
+    }
+    stats.count++;
+}
+
+// Merge all thread-local stats into the global stats
+void merge_thread_stats() {
+    for (auto& kv : thread_stats) {
+        auto& fn = kv.first;
+        auto& thread_stat = kv.second;
+
+        // Merge the thread's stats into the global g_stats
+        auto it = g_stats.find(fn);
+        if (it == g_stats.end()) {
+            g_stats[fn] = thread_stat;
+        } else {
+            Stats& global_stat = it->second;
+            if (thread_stat.min_ns < global_stat.min_ns) global_stat.min_ns = thread_stat.min_ns;
+            if (thread_stat.max_ns > global_stat.max_ns) global_stat.max_ns = thread_stat.max_ns;
+            global_stat.count += thread_stat.count;
+        }
+    }
+}
+
+// Function to print the top 10 spread
+
 #include <elfutils/libdwfl.h>
 #include <cstdio>
 #include <cstdlib>
@@ -124,6 +164,41 @@ static void NO_INSTRUMENT update_stats(void* fn, uint64_t dur_ns) {
 }
 
 static void NO_INSTRUMENT print_top10_spread() {
+    struct Row {
+        void* fn;
+        uint64_t min_ns;
+        uint64_t max_ns;
+        uint64_t spread_ns;
+        uint64_t count;
+    };
+    merge_thread_stats();
+    std::vector<Row> rows;
+    rows.reserve(g_stats.size());
+
+    for (auto& kv : g_stats) {
+        const Stats& s = kv.second;
+        uint64_t spread = (s.max_ns >= s.min_ns) ? (s.max_ns - s.min_ns) : 0;
+        rows.push_back(Row{kv.first, s.min_ns, s.max_ns, spread, s.count});
+    }
+
+    std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+        return a.spread_ns > b.spread_ns;
+    });
+
+    const size_t topN = std::min<size_t>(50, rows.size());
+    std::fprintf(stderr, "\n=== Top %zu functions by (max_duration - min_duration) [ns] ===\n", topN);
+    std::fprintf(stderr, "%-4s %-40s %12s %12s %12s %8s\n", "Rank", "Function", "min(ns)", "max(ns)", "spread", "calls");
+
+    for (size_t i = 0; i < topN; i++) {
+        char buf[100];
+        const char* name = symbolize_addr(rows[i].fn, buf, sizeof(buf));
+        std::fprintf(stderr, "%-4zu %-100s %12" PRIu64 " %12" PRIu64 " %12" PRIu64 " %8" PRIu64 "\n",
+                     i + 1, name, rows[i].min_ns, rows[i].max_ns, rows[i].spread_ns, rows[i].count);
+    }
+    std::fprintf(stderr, "=============================================================\n");
+}
+#if 0
+static void NO_INSTRUMENT print_top10_spread() {
   struct Row {
     void* fn;
     uint64_t min_ns;
@@ -161,7 +236,7 @@ static void NO_INSTRUMENT print_top10_spread() {
   }
   std::fprintf(stderr, "=============================================================\n");
 }
-
+#endif
 // Ensure we print once at exit
 static std::atomic<bool> g_registered{false};
 
@@ -239,7 +314,7 @@ void NO_INSTRUMENT __cyg_profile_func_exit(void* this_fn, void* call_site) {
   tls_stack.resize((size_t)idx); // pop everything above (keeps stack consistent)
 
   uint64_t dur = end - fr.start_ns;
-  update_stats(this_fn, dur);
+  update_stats_in_thread(this_fn, dur);
   has_exited = false;
 }
 
