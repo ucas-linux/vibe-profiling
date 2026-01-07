@@ -206,7 +206,7 @@ void NO_INSTRUMENT __cyg_profile_func_enter(void* this_fn, void* call_site) {
 	
 	has_entered = true;
 	(void)call_site;
-	ensure_registered();
+	//ensure_registered();
 
 	// record start time on per-thread stack
 	tls_stack.push_back(Frame{this_fn, now_ns()});
