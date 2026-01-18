@@ -32,6 +32,16 @@ source ~/venvs/torch-src/bin/activate
 
 python -m pip install -U pip setuptools wheel
 
+export CMAKE_BUILD_TYPE=Debug
+export CMAKE_GENERATOR=Ninja
+export USE_CUDA=0
+export USE_ROCM=0
+export USE_CUFILE=0
+export USE_NCCL=0
+export USE_DISTRIBUTED=0
+export CMAKE_CXX_FLAGS=-finstrument-functions
+export BUILT_TEST=0
+
 python -m pip install --no-build-isolation -v -e .
 
 
