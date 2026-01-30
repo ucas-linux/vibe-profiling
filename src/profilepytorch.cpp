@@ -30,6 +30,7 @@ static inline uint64_t NO_INSTRUMENT now_ns() {
 struct Frame {
   void* fn;
   uint64_t start_ns;
+  uint64_t end_ns;	
 };
 
 static thread_local std::vector<Frame> tls_stack;
@@ -195,7 +196,7 @@ static void NO_INSTRUMENT print_top10_spread() {
 
     for (auto& kv : g_stats) {
         const Stats& s = kv.second;
-        uint64_t spread = (s.max_ns >= s.min_ns) ? (s.max_ns - s.min_ns) : 0;
+        uint64_t spread = (s.max_ns >= s.min_ns) ? ((s.max_ns - s.min_ns)*100)/s.max_ns : 0;
         rows.push_back(Row{kv.first, s.min_ns, s.max_ns, spread, s.count});
     }
 
@@ -205,7 +206,7 @@ static void NO_INSTRUMENT print_top10_spread() {
 
     const size_t topN = std::min<size_t>(50, rows.size());
     std::fprintf(stderr, "\n=== Top %zu functions by (max_duration - min_duration) [ns] ===\n", topN);
-    std::fprintf(stderr, "%-4s %-40s %12s %12s %12s %8s\n", "Rank", "Function", "min(ns)", "max(ns)", "spread", "calls");
+    std::fprintf(stderr, "%-4s %-40s %12s %12s %12s %8s\n", "Rank", "Function", "min(ns)", "max(ns)", "spread %", "calls");
 
     for (size_t i = 0; i < topN; i++) {
         char buf[100];
@@ -321,33 +322,65 @@ void NO_INSTRUMENT __cyg_profile_func_enter(void* this_fn, void* call_site) {
 }
 
 void NO_INSTRUMENT __cyg_profile_func_exit(void* this_fn, void* call_site) {
-  (void)call_site;
-  if (has_exited || !call_init_finished || has_entered || !beginrecord)
-	  return;
-/*
-  if (is_function_excluded(this_fn))
-		return;
-*/
-  has_exited = true;
-  if (tls_stack.empty()) return;
+    (void)call_site;
 
-  // In well-formed instrumentation, the top should match this_fn.
-  // If it doesn't (rare; e.g., longjmp), we try to recover by searching backwards.
-  uint64_t end = now_ns();
+    // Check if we should return early
+    if (has_exited || !call_init_finished || has_entered || !beginrecord)
+        return;
 
-  ssize_t idx = (ssize_t)tls_stack.size() - 1;
-  if (tls_stack[(size_t)idx].fn != this_fn) {
-    for (ssize_t j = idx; j >= 0; --j) {
-      if (tls_stack[(size_t)j].fn == this_fn) { idx = j; break; }
+    has_exited = true;
+
+    // If the stack is empty, there's nothing to do
+    if (tls_stack.empty()) return;
+
+    uint64_t end = now_ns();  // Get the end time for the parent function
+
+    // Find the index of the current function in the stack (if it's not at the top)
+    ssize_t idx = (ssize_t)tls_stack.size() - 1;
+    if (tls_stack[(size_t)idx].fn != this_fn) {
+        // If the function is not at the top, search the stack for it
+        for (ssize_t j = idx; j >= 0; --j) {
+            if (tls_stack[(size_t)j].fn == this_fn) { 
+                idx = j; 
+                break; 
+            }
+        }
     }
-  }
 
-  Frame fr = tls_stack[(size_t)idx];
-  tls_stack.resize((size_t)idx); // pop everything above (keeps stack consistent)
+    // Retrieve the frame information for the current function
+    Frame fr = tls_stack[(size_t)idx];
 
-  uint64_t dur = end - fr.start_ns;
-  update_stats_in_thread(this_fn, dur);
-  has_exited = false;
+    // Resize the stack to pop the current function (and everything above it)
+    tls_stack.resize((size_t)idx);
+
+    // Set the end time for the current function (this_fn)
+    fr.end_ns = end;
+
+    // Calculate the total duration of the current function call
+    uint64_t dur = end - fr.start_ns;
+
+    // Now subtract the time of any child functions (functions still in the stack)
+    uint64_t total_child_time = 0;
+
+    // Iterate over all frames that were pushed after this_fn was called (i.e., child functions)
+    for (size_t i = idx + 1; i < tls_stack.size(); ++i) {
+        const Frame& child_frame = tls_stack[i];
+
+        // Calculate the child's duration from its recorded end time
+        uint64_t child_dur = child_frame.end_ns - child_frame.start_ns;
+
+        total_child_time += child_dur;
+
+        // Optionally, update stats for each child function
+        update_stats_in_thread(child_frame.fn, child_dur);
+    }
+
+    // Subtract the total child time from the parent function's duration
+    dur -= total_child_time;
+
+    // Update the stats for this function
+    update_stats_in_thread(this_fn, dur);
+
+    has_exited = false;
 }
-
 } // extern "C"
